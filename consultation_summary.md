@@ -7,12 +7,12 @@
 
 هدف: ساخت یک موتور جستجوی Enterprise برای دیتای اینستاگرام.
 
-| معیار (Metric) | هدف (Target) | توضیح |
-| :--- | :--- | :--- |
-| **Scale** | **100M+ Documents** | قابلیت جستجو در صدها میلیون پست |
-| **Latency** | **< 300ms** | پاسخدهی سریع (P95) |
-| **Throughput** | **10,000 QPS** | تحمل بار بالا |
-| **Freshness** | **< 30s** | ایندکس شدن پست‌های جدید در کمتر از ۳۰ ثانیه |
+| معیار (Metric) | وضعیت فعلی | هدف (۱ سال آینده) | توضیح |
+| :--- | :--- | :--- | :--- |
+| **Scale** | **100M Posts** | **500M Posts** | رشد سریع دیتا در سال اول |
+| **Latency** | **< 300ms** | **< 300ms** | پاسخدهی سریع (P95) حتی با ۵۰۰ میلیون رکورد |
+| **Throughput** | **10,000 QPS** | **10,000 QPS** | تحمل بار بالا |
+| **Freshness** | **< 30s** | **< 30s** | ایندکس شدن پست‌های جدید در کمتر از ۳۰ ثانیه |
 
 ---
 
@@ -24,12 +24,12 @@
 graph TB
     subgraph "Ingestion Layer"
         API[API Gateway] --> K[Kafka Cluster]
-        K --> F[Flink Processors]
+        K --> C[Consumers / Workers]
     end
 
     subgraph "Storage & Indexing"
-        F -->|Real-time| ES[Elasticsearch Cluster]
-        F -->|Persistent| SQL[SQL Server]
+        C -->|Real-time| ES[Elasticsearch Cluster]
+        C -->|Persistent| SQL[SQL Server]
         SQL -.->|Batch/CDC| ES
     end
 
@@ -54,53 +54,39 @@ graph TB
 | **Elasticsearch** | Search Engine | Native Full-text, Vector Support, Scale | Solr (کندتر), Algolia (گران/محدود) |
 | **SQL Server** | Source of Truth | ACID Transactions, CDC Support, Team Skill | PostgreSQL (تیم دات‌نت هستیم) |
 | **Kafka** | Message Broker | Decoupling, Durability, Replay capability | RabbitMQ (Scale پایین‌تر) |
-| **Apache Flink** | Stream Processing | Stateful processing, Low latency, Exactly-once | Spark Streaming (Micro-batch latency) |
 | **Redis** | Caching | Sub-ms latency, Distributed locking | Memcached (Feature کمتر) |
 
 ---
 
 ## 4. استراتژی‌های مهم پیاده‌سازی (Critical Implementation Details)
 
-### الف) Sharding Strategy
-- **تعداد Shards**: ۱۸ عدد (برای ۵۰۰ گیگابایت دیتا).
-- **سایز هر Shard**: حدود ۲۷ گیگابایت (Optimal range: 10-50GB).
-- **سوال برای مشاوره**: آیا با توجه به رشد دیتا، ۱۸ شارد برای شروع مناسب است یا باید Over-sharding کنیم؟
+### الف) Hybrid Search (BM25 + Vector) - **(نقطه اصلی مشاوره)**
+ما می‌خواهیم ترکیبی از جستجوی کلمات کلیدی و معنایی داشته باشیم تا بهترین نتیجه را بگیریم.
 
-### ب) Hybrid Search (BM25 + Vector)
-ترکیب جستجوی کلمات کلیدی و معنایی:
-- **BM25 (30%)**: برای تطبیق دقیق کلمات (Exact Match).
-- **Vector (25%)**: برای درک معنایی (Semantic) با مدل `all-MiniLM-L12-v2`.
-- **Engagement (20%)**: لایک و کامنت.
-- **Recency (15%)**: تازگی محتوا.
-- **Authority (10%)**: اعتبار اکانت.
+**فرمول پیشنهادی:**
+```text
+Final Score = (0.30 * BM25) + (0.25 * Vector) + (0.20 * Engagement) + (0.15 * Recency) + (0.10 * Authority)
+```
+- **BM25 (30%)**: برای تطبیق دقیق کلمات (مثلاً وقتی کاربر هشتگ خاصی را سرچ می‌کند).
+- **Vector (25%)**: برای درک معنایی (Semantic).
+- **Engagement (20%)**: تاثیر لایک و کامنت در رتبه بندی.
+- **Recency (15%)**: اهمیت تازگی محتوا.
+- **Authority (10%)**: اعتبار اکانت منتشر کننده.
 
-### ج) Learning to Rank (LTR)
-استفاده از مدل **LambdaMART** برای بازچینی (Re-ranking) نتایج نهایی.
-- **روش**: استخراج فیچرها از ۱۰۰ نتیجه اول و مرتب‌سازی مجدد با مدل ML.
-- **سوال برای مشاوره**: آیا هزینه Performance مدل LTR برای ۱۰,۰۰۰ QPS توجیه‌پذیر است؟
+> [!IMPORTANT]
+> **سوال مهم در مورد مدل وکتور:**
+> برای تبدیل متن به وکتور (Embedding)، بهترین گزینه برای اسکیل ما چیست؟
+> 1. استفاده از مدل‌های **Open Source** روی Hugging Face (مثل `all-MiniLM-L12-v2`) که خودمان هاست کنیم؟
+> 2. استفاده از APIهای آماده مثل **OpenAI text-embedding-3-large**؟
+> (با توجه به هزینه و Latency و حجم ۵۰۰ میلیون داکیومنت)
 
----
-
-## 5. سوالات کلیدی برای جلسه مشاوره (Consultation Points)
-
-این‌ها نقاطی هستند که بیشترین ریسک یا ابهام را دارند و نیاز به نظر متخصص داریم:
-
-1.  **Sharding & Scaling**:
-    - آیا استراتژی ۱۸ شارد برای ۱۰۰ میلیون داکیومنت کافی است؟ اگر به ۵۰۰ میلیون برسیم، Re-indexing چقدر دردسر دارد؟ آیا ILM (Index Lifecycle Management) به تنهایی کافی است؟
-
-2.  **Real-time Indexing (Flink vs Spark)**:
-    - ما Flink را انتخاب کردیم چون True Streaming است. آیا پیچیدگی نگهداری Flink نسبت به Spark Streaming ارزشش را دارد؟
-
-3.  **Vector Search Performance**:
-    - استفاده از HNSW با `m=16` و `ef_construction=100`. آیا این تنظیمات برای Scale ما مناسب است یا Memory Overhead زیادی ایجاد می‌کند؟ آیا `int8 quantization` دقت را خیلی پایین نمی‌آورد؟
-
-4.  **SQL Server CDC**:
-    - آیا CDC روی SQL Server با حجم دیتای بالا (High Write Throughput) باعث کندی دیتابیس اصلی نمی‌شود؟
-
-5.  **Hardware Sizing**:
-    - برای کلاستر Elasticsearch چه مشخصات سخت‌افزاری (RAM/CPU) پیشنهاد می‌شود تا Latency زیر ۳۰۰ میلی‌ثانیه تضمین شود؟
+### ب) Sharding Strategy
+با توجه به رشد دیتا از ۱۰۰ میلیون به ۵۰۰ میلیون در سال اول:
+- **تعداد Shards**: ۱۸ عدد (برای شروع).
+- **سایز هر Shard**: حدود ۲۷ گیگابایت.
+- **چالش**: آیا با رسیدن به ۵۰۰ میلیون پست، نیاز به Re-indexing سنگین خواهیم داشت یا از الان باید تعداد Shard ها را بیشتر بگیریم (Over-sharding)؟
 
 ---
 
 > [!TIP]
-> **خروجی مورد انتظار از جلسه**: تایید معماری فعلی یا پیشنهاد تغییرات حیاتی قبل از شروع پیاده‌سازی سنگین.
+> **خروجی مورد انتظار از جلسه**: تایید فرمول Hybrid Search و انتخاب مدل مناسب برای Vector Embedding.
