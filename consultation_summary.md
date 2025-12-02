@@ -1,7 +1,7 @@
-# خلاصه فنی پروژه موتور جستجوی اینستاگرام (نسخه مشاوره)
+# خلاصه فنی پروژه موتور جستجوی اینستاگرام
 
 > [!NOTE]
-> این سند برای ارائه در جلسه مشاوره فنی آماده شده است و تمرکز آن بر معماری، انتخاب تکنولوژی و نقاط کلیدی تصمیم‌گیری است.
+> این سند تمرکز بر معماری، انتخاب تکنولوژی و نقاط کلیدی تصمیم‌گیری دارد.
 
 ## 1. نمای کلی پروژه (Project Snapshot)
 
@@ -39,8 +39,8 @@ graph TB
         Cache -.-> ES
     end
 
-    style ES fill:#bfb,stroke:#333,stroke-width:2px
-    style SQL fill:#fbb,stroke:#333,stroke-width:2px
+    style ES fill:#2d5,stroke:#333,stroke-width:2px,color:#fff
+    style SQL fill:#d44,stroke:#333,stroke-width:2px,color:#fff
 ```
 
 ---
@@ -60,7 +60,7 @@ graph TB
 
 ## 4. استراتژی‌های مهم پیاده‌سازی (Critical Implementation Details)
 
-### الف) Hybrid Search (BM25 + Vector) - **(نقطه اصلی مشاوره)**
+### الف) Hybrid Search (BM25 + Vector)
 ما می‌خواهیم ترکیبی از جستجوی کلمات کلیدی و معنایی داشته باشیم تا بهترین نتیجه را بگیریم.
 
 **فرمول پیشنهادی:**
