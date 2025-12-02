@@ -1,66 +1,38 @@
 # خلاصه فنی پروژه موتور جستجوی اینستاگرام
 
-> [!NOTE]
-> این سند تمرکز بر معماری، انتخاب تکنولوژی و نقاط کلیدی تصمیم‌گیری دارد.
+## معرفی محصول
 
-## 1. نمای کلی پروژه (Project Snapshot)
+ما یک محصول **Social Listening** داریم که به صورت مداوم پست‌های اینستاگرام را کرال می‌کند. هدف ما پیاده‌سازی یک موتور جستجوی قوی و مقیاس‌پذیر است که بتواند این حجم عظیم داده را به سرعت و با دقت بالا جستجو کند.
 
-هدف: ساخت یک موتور جستجوی Enterprise برای دیتای اینستاگرام.
-
-| معیار (Metric) | وضعیت فعلی | هدف (۱ سال آینده) | توضیح |
-| :--- | :--- | :--- | :--- |
-| **Scale** | **100M Posts** | **500M Posts** | رشد سریع دیتا در سال اول |
-| **Latency** | **< 300ms** | **< 300ms** | پاسخدهی سریع (P95) حتی با ۵۰۰ میلیون رکورد |
-| **Throughput** | **10,000 QPS** | **10,000 QPS** | تحمل بار بالا |
-| **Freshness** | **< 30s** | **< 30s** | ایندکس شدن پست‌های جدید در کمتر از ۳۰ ثانیه |
+**وضعیت فعلی داده:**
+- حدود **200 میلیون پست** در حال حاضر
+- پیش‌بینی رشد به **500 میلیون پست** تا سال آینده
 
 ---
 
-## 2. معماری کلان (High-Level Architecture)
+## 2. تکنولوژی‌های کلیدی
 
-ما از یک معماری **Lambda** استفاده می‌کنیم تا هم Real-time باشیم و هم Consistency داشته باشیم.
-
-```mermaid
-graph TB
-    subgraph "Ingestion Layer"
-        API[API Gateway] --> K[Kafka Cluster]
-        K --> C[Consumers / Workers]
-    end
-
-    subgraph "Storage & Indexing"
-        C -->|Real-time| ES[Elasticsearch Cluster]
-        C -->|Persistent| SQL[SQL Server]
-        SQL -.->|Batch/CDC| ES
-    end
-
-    subgraph "Serving Layer"
-        User --> API
-        API --> Cache[Redis Cluster]
-        Cache -.-> ES
-    end
-
-    style ES fill:#2d5,stroke:#333,stroke-width:2px,color:#fff
-    style SQL fill:#d44,stroke:#333,stroke-width:2px,color:#fff
-```
+- **Elasticsearch**: موتور جستجو اصلی
+- **SQL Server**: ذخیره‌سازی اصلی داده (Source of Truth)
+- **Kafka**: صف پیام‌رسانی برای Real-time Processing
+- **Redis**: کش کردن نتایج جستجو
 
 ---
 
-## 3. تکنولوژی‌های کلیدی (Tech Stack Decisions)
+## 3. Pre-Processing و ذخیره‌سازی داده
 
-چرا این تکنولوژی‌ها را انتخاب کردیم؟ (نیاز به تایید مشاور)
+### الف) Pre-Processing هنگام ایندکس (Indexing Time)
 
-| تکنولوژی | نقش | دلیل انتخاب | جایگزین‌های رد شده |
-| :--- | :--- | :--- | :--- |
-| **Elasticsearch** | Search Engine | Native Full-text, Vector Support, Scale | Solr (کندتر), Algolia (گران/محدود) |
-| **SQL Server** | Source of Truth | ACID Transactions, CDC Support, Team Skill | PostgreSQL (تیم دات‌نت هستیم) |
-| **Kafka** | Message Broker | Decoupling, Durability, Replay capability | RabbitMQ (Scale پایین‌تر) |
-| **Redis** | Caching | Sub-ms latency, Distributed locking | Memcached (Feature کمتر) |
+**سوال:** چگونه باید کپشن‌ها را قبل از ایندکس کردن Pre-process کنیم؟ (Normalization، Hashtag Extraction، Embedding Generation و...)
+
+### ب) Pre-Processing هنگام جستجو (Query Time)
+
+**سوال:** چگونه باید Query کاربر را قبل از جستجو Pre-process کنیم؟ (Normalization، Query Expansion، Embedding و...)
 
 ---
 
-## 4. استراتژی‌های مهم پیاده‌سازی (Critical Implementation Details)
+## 4. استراتژی Hybrid Search (BM25 + Vector)
 
-### الف) Hybrid Search (BM25 + Vector)
 ما می‌خواهیم ترکیبی از جستجوی کلمات کلیدی و معنایی داشته باشیم تا بهترین نتیجه را بگیریم.
 
 **فرمول پیشنهادی:**
@@ -73,6 +45,8 @@ Final Score = (0.30 * BM25) + (0.25 * Vector) + (0.20 * Engagement) + (0.15 * Re
 - **Recency (15%)**: اهمیت تازگی محتوا.
 - **Authority (10%)**: اعتبار اکانت منتشر کننده.
 
+**سوال:** آیا این استراتژی درست است؟ کامل است؟ آیا وزن‌ها (Weights) مناسب هستند؟
+
 > [!IMPORTANT]
 > **سوال مهم در مورد مدل وکتور:**
 > برای تبدیل متن به وکتور (Embedding)، بهترین گزینه برای اسکیل ما چیست؟
@@ -80,13 +54,8 @@ Final Score = (0.30 * BM25) + (0.25 * Vector) + (0.20 * Engagement) + (0.15 * Re
 > 2. استفاده از APIهای آماده مثل **OpenAI text-embedding-3-large**؟
 > (با توجه به هزینه و Latency و حجم ۵۰۰ میلیون داکیومنت)
 
-### ب) Sharding Strategy
-با توجه به رشد دیتا از ۱۰۰ میلیون به ۵۰۰ میلیون در سال اول:
-- **تعداد Shards**: ۱۸ عدد (برای شروع).
-- **سایز هر Shard**: حدود ۲۷ گیگابایت.
-- **چالش**: آیا با رسیدن به ۵۰۰ میلیون پست، نیاز به Re-indexing سنگین خواهیم داشت یا از الان باید تعداد Shard ها را بیشتر بگیریم (Over-sharding)؟
-
 ---
 
-> [!TIP]
-> **خروجی مورد انتظار از جلسه**: تایید فرمول Hybrid Search و انتخاب مدل مناسب برای Vector Embedding.
+## 5. اندازه‌گیری دقت جستجو (Search Quality Metrics)
+
+**سوال:** چطور می‌توانیم دقت جستجو را اندازه بگیریم؟ راه‌حل چیست؟ (NDCG، Precision/Recall، CTR و...)
